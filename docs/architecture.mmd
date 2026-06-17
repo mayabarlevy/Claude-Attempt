@@ -1,0 +1,41 @@
+%%{init: {'theme':'base', 'flowchart': {'curve':'basis','nodeSpacing':55,'rankSpacing':95,'padding':14}, 'themeVariables': {'fontSize':'18px','fontFamily':'Helvetica,Arial,sans-serif'}}}%%
+flowchart LR
+    %% ===== inputs =====
+    prot(["Protein<br/>sequences"]):::inp
+    dna(["DNA probes<br/>36 bp"]):::inp
+    aff(["Affinity<br/>N × P"]):::inp
+
+    %% ===== protein tower =====
+    dbd["DBD trim<br/><i>optional</i>"]:::opt
+    esm[["Frozen ESM-2<br/>(cached)"]]:::frozen
+    ptok("Protein tower<br/><b>K specificity tokens</b>"):::ptow
+
+    %% ===== DNA tower =====
+    onehot["one-hot"]:::dnastep
+    dtow("DNA tower · CNN<br/><b>per-position map</b>"):::dtow
+
+    %% ===== fusion + train =====
+    xattn{{"Cross-attention<br/>tokens scan positions"}}:::fuse
+    tgt["Target z-score<br/>per protein"]:::data
+    train("Train + evaluate<br/>leave-proteins-out CV"):::train
+
+    %% ---- protein lane ----
+    prot --> dbd --> esm --> ptok --> xattn
+    %% ---- dna lane ----
+    dna --> onehot --> dtow --> xattn
+    %% ---- fuse + train ----
+    xattn ==> train
+    aff --> tgt -. target .-> train
+
+    classDef inp fill:#E3F2FD,stroke:#1E88E5,stroke-width:1.5px,color:#0D47A1;
+    classDef opt fill:#FFFDE7,stroke:#FBC02D,stroke-width:1.5px,color:#5D4037,stroke-dasharray:5 3;
+    classDef frozen fill:#ECEFF1,stroke:#607D8B,stroke-width:1.5px,color:#37474F,stroke-dasharray:4 3;
+    classDef ptow fill:#F3E5F5,stroke:#8E24AA,stroke-width:2px,color:#4A148C;
+    classDef dnastep fill:#E8F5E9,stroke:#43A047,stroke-width:1.5px,color:#1B5E20;
+    classDef dtow fill:#E8F5E9,stroke:#43A047,stroke-width:2px,color:#1B5E20;
+    classDef fuse fill:#FFCC80,stroke:#EF6C00,stroke-width:3px,color:#E65100;
+    classDef data fill:#F5F5F5,stroke:#9E9E9E,stroke-width:1.5px,color:#424242;
+    classDef train fill:#E8EAF6,stroke:#3949AB,stroke-width:2px,color:#1A237E;
+
+    linkStyle 7 stroke:#EF6C00,stroke-width:3px;
+    linkStyle 9 stroke:#9E9E9E,stroke-width:1.5px,stroke-dasharray:5 4;
