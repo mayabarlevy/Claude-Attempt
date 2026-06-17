@@ -374,3 +374,6 @@ larger, more diverse protein set is what makes unseen-protein generalization
 work. Use [analyze_preds.py](analyze_preds.py) to check whether the gap to a
 perfect score is a hard tail of near-constant TFs (a data ceiling) or something
 the model can still learn.
+
+python -u train.py --config config.yaml --folds 1 --epochs 80 \
+  --out-dir runs/baseline_f0 > baseline_f0.log 2>&1
