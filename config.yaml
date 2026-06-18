@@ -10,13 +10,14 @@ data_path: training_data_small.txt
 # To swap the protein encoder: build a different cache and point here.
 #   pooled:      esm2_t33_650M_UR50D.pt (1280-d) | esm2_t30_150M_UR50D.pt (640-d) | kmer3.pt
 #   per-residue: esm2_t33_650M_UR50D_perres.pt [P,R,1280] | esm2_t36_3B_UR50D_perres.pt [P,R,2560]
-#                (built with --per-residue; required by the attn_pool_tokens encoder)
-esm_cache: cache/esm2_t33_650M_UR50D_perres.pt
+#   physchem:    esm2_t33_650M_UR50D_physchem_perres.pt [P,R,1286]
+#                (built with --per-residue --physchem; required by the attn_pool_tokens encoder)
+esm_cache: cache/esm2_t33_650M_UR50D_physchem_perres.pt
 
 # --- target transform (see explore_data.py for the rationale) ---
 target:
   mode: per_protein     # per_protein (recommended; ~94x scale spread across proteins) | global
-  log1p: false          # true compresses the right skew (skew 0.62 -> ~0)
+  log1p: false         # true compresses the right skew (skew 0.62 -> ~0)
   clip_quantile: 0.001  # per-side tail fraction: winsorize to [0.001, 0.999] train quantiles; null to disable
 
 # --- model components (each `name` indexes a registry in encoders.py) ---
@@ -58,7 +59,7 @@ weight_decay: 0.0001
 # --- loss (elementwise Huber + per-protein correlation term, metric-aligned) ---
 loss:
   huber_delta: 1.0
-  corr_lambda: 1.0      # weight on (1 - per-protein Pearson) over each probe block
+  corr_lambda: 1.0     # weight on (1 - per-protein Pearson) over each probe block
 esm_noise: 0.05         # Gaussian noise on frozen residue reps (protein-side reg)
 scheduler: cosine      # cosine (linear warmup -> cosine decay) | plateau
 warmup_epochs: 5
