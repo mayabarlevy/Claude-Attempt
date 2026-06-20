@@ -30,9 +30,9 @@ dna_encoder:
   dropout: 0.2
 
 protein_encoder:
-  name: attn_pool_tokens  # mlp | mlp_res | linear | identity | attn_pool_tokens
+  name: attn_pool_tokens_physbias  # mlp | mlp_res | linear | identity | attn_pool_tokens
   out_dim: 128          # per-token feature dim
-  n_tokens: 8           # K learned specificity queries
+  n_tokens: 8          # K learned specificity queries
   hidden: 512
   attn_dim: 128         # residue-attention key dim
   dropout: 0.3

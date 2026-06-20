@@ -227,6 +227,66 @@ class CNNDeepPosEncoder(BaseDNAEncoder):
         h = self.proj(h).transpose(1, 2)   # [B, L, out_dim]
         return self.norm(h)
 
+@register_dna_encoder("cnn_deep_pos_dnafeat")
+class CNNDeepPosDNAFeatEncoder(BaseDNAEncoder):
+    """CNNDeepPosEncoder with simple DNA biochemical feature channels.
+
+    Input is the regular one-hot DNA tensor [B, 4, L] ordered as A,C,G,T.
+    We append cheap biochemical channels:
+      GC, AT, purine, pyrimidine, amino, keto.
+    """
+
+    def __init__(self, seq_len: int, out_dim: int = 128, channels: int = 256, dropout: float = 0.2):
+        super().__init__()
+        self.seq_len = seq_len
+        self.out_dim = out_dim
+
+        self.net = nn.Sequential(
+            nn.Conv1d(10, channels, kernel_size=11, padding="same"),
+            nn.BatchNorm1d(channels),
+            nn.GELU(),
+            nn.Dropout(dropout),
+
+            nn.Conv1d(channels, channels, kernel_size=7, padding="same"),
+            nn.BatchNorm1d(channels),
+            nn.GELU(),
+            nn.Dropout(dropout),
+
+            nn.Conv1d(channels, out_dim, kernel_size=5, padding="same"),
+            nn.BatchNorm1d(out_dim),
+            nn.GELU(),
+        )
+
+        self.pos_emb = nn.Parameter(torch.zeros(1, seq_len, out_dim))
+        nn.init.normal_(self.pos_emb, std=0.02)
+
+    @staticmethod
+    def _dna_features(x: torch.Tensor) -> torch.Tensor:
+        # x: [B, 4, L], order A,C,G,T
+        a = x[:, 0:1, :]
+        c = x[:, 1:2, :]
+        g = x[:, 2:3, :]
+        t = x[:, 3:4, :]
+
+        gc = g + c
+        at = a + t
+
+        # Purines are larger two-ring bases: A/G.
+        purine = a + g
+
+        # Pyrimidines are smaller one-ring bases: C/T.
+        pyrimidine = c + t
+
+        # Amino bases: A/C. Keto bases: G/T.
+        amino = a + c
+        keto = g + t
+
+        return torch.cat([x, gc, at, purine, pyrimidine, amino, keto], dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self._dna_features(x)
+        h = self.net(x).transpose(1, 2)  # [B, L, out_dim]
+        return h + self.pos_emb[:, : h.size(1), :]
 
 @register_dna_encoder("rnn")
 class BiLSTMEncoder(BaseDNAEncoder):
@@ -334,7 +394,62 @@ class AttnPoolTokensEncoder(BaseProteinEncoder):
         tokens = torch.einsum("bkr,brv->bkv", attn, v)    # [B, K, out_dim]
         return self.out_norm(tokens)
 
+@register_protein_encoder("attn_pool_tokens_physbias")
+class AttnPoolTokensPhysBiasEncoder(AttnPoolTokensEncoder):
+    """AttnPoolTokensEncoder with a small biochemical bias toward DNA-binding residues.
 
+    Assumes that when physchem v1 is used, the last 6 protein features are:
+      charge, hydrophobicity, polarity, aromatic, positive, negative.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int = 128,
+        n_tokens: int = 8,
+        hidden: int = 512,
+        attn_dim: int = 128,
+        dropout: float = 0.3,
+        phys_bias_init: float = 0.10,
+    ):
+        super().__init__(
+            in_dim=in_dim,
+            out_dim=out_dim,
+            n_tokens=n_tokens,
+            hidden=hidden,
+            attn_dim=attn_dim,
+            dropout=dropout,
+        )
+        self.phys_bias_scale = nn.Parameter(torch.tensor(float(phys_bias_init)))
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+        # x: [B, R, in_dim]; mask: [B, R] bool
+        h = self.proj(x)
+        k = self.key(h)
+        v = self.val(h)
+
+        logits = torch.einsum("ka,bra->bkr", self.queries, k) * (self.attn_dim ** -0.5)
+
+        # Last 6 dims in the physchem v1 cache:
+        # charge, hydrophobicity, polarity, aromatic, positive, negative.
+        if x.size(-1) >= 1286:
+            phys = x[..., -6:].to(dtype=logits.dtype)
+            charge = phys[..., 0]
+            positive = phys[..., 4]
+            negative = phys[..., 5]
+
+            # Higher for K/R/H-like positive residues; lower for D/E-like negative residues.
+            basic_score = charge + 0.5 * positive - negative
+
+            logits = logits + self.phys_bias_scale * basic_score.unsqueeze(1)
+
+        if mask is not None:
+            logits = logits.masked_fill(~mask.unsqueeze(1), float("-inf"))
+
+        attn = torch.softmax(logits, dim=-1)
+        tokens = torch.einsum("bkr,brv->bkv", attn, v)
+        return self.out_norm(tokens)
+    
 @register_protein_encoder("linear")
 class LinearProteinEncoder(BaseProteinEncoder):
     def __init__(self, in_dim: int, out_dim: int = 256):
