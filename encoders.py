@@ -439,7 +439,7 @@ class AttnPoolTokensPhysBiasEncoder(AttnPoolTokensEncoder):
             negative = phys[..., 5]
 
             # Higher for K/R/H-like positive residues; lower for D/E-like negative residues.
-            basic_score = charge + 0.5 * positive
+            basic_score = charge 
 
             logits = logits + self.phys_bias_scale * basic_score.unsqueeze(1)
 
