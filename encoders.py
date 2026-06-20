@@ -438,7 +438,7 @@ class AttnPoolTokensPhysBiasEncoder(AttnPoolTokensEncoder):
             aromatic = phys[..., 3]
 
             # Higher for K/R/H-like positive residues; lower for D/E-like negative residues.
-            basic_score = charge + 0.10 * aromatic
+            basic_score = charge + 0.25 * aromatic
 
             logits = logits + self.phys_bias_scale * basic_score.unsqueeze(1)
 
