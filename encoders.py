@@ -435,11 +435,10 @@ class AttnPoolTokensPhysBiasEncoder(AttnPoolTokensEncoder):
         if x.size(-1) >= 1286:
             phys = x[..., -6:].to(dtype=logits.dtype)
             charge = phys[..., 0]
-            positive = phys[..., 4]
-            negative = phys[..., 5]
+            aromatic = phys[..., 3]
 
             # Higher for K/R/H-like positive residues; lower for D/E-like negative residues.
-            basic_score = charge 
+            basic_score = charge + 0.25 * aromatic
 
             logits = logits + self.phys_bias_scale * basic_score.unsqueeze(1)
 
