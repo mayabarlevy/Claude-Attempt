@@ -156,6 +156,77 @@ def evaluate_blocked(model, dna_onehot, esm_emb, prot_ids, aff_raw, device,
     dna_idx = np.tile(np.arange(N), len(prot_ids))
     return prot_idx, dna_idx, y_true, y_pred
 
+def _zscore_np(x: np.ndarray) -> np.ndarray:
+    """Z-score one prediction/profile vector.
+
+    Pearson is invariant to affine scaling, but blending two sources works better
+    when the model profile and nearest-neighbor profile are placed on the same
+    scale first.
+    """
+    x = x.astype(np.float64)
+    return (x - x.mean()) / (x.std() + 1e-8)
+
+
+def _pooled_protein_embeddings_np(esm_emb: torch.Tensor, esm_mask=None) -> np.ndarray:
+    """Convert per-residue protein representations to one vector per protein.
+
+    The neural model still uses the full per-residue cache. This pooled view is
+    used only for the nearest-neighbor search in ESM/physchem embedding space.
+    """
+    with torch.no_grad():
+        if esm_emb.ndim == 3:
+            if esm_mask is not None:
+                mask = esm_mask.to(dtype=esm_emb.dtype).unsqueeze(-1)  # [P, R, 1]
+                pooled = (esm_emb * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-8)
+            else:
+                pooled = esm_emb.mean(dim=1)
+        else:
+            pooled = esm_emb
+
+        pooled = pooled.detach().cpu().float().numpy()
+
+    pooled = pooled / (np.linalg.norm(pooled, axis=1, keepdims=True) + 1e-8)
+    return pooled
+
+
+def apply_knn_blend_predictions(
+    prot_idx: np.ndarray,
+    dna_idx: np.ndarray,
+    y_pred: np.ndarray,
+    aff_raw: np.ndarray,
+    train_ids: np.ndarray,
+    val_ids: np.ndarray,
+    protein_sim_emb: np.ndarray,
+    alpha_model: float,
+) -> np.ndarray:
+    """Blend model predictions with the nearest training protein affinity profile.
+
+    For each held-out validation protein:
+      1. Find nearest training protein by cosine similarity in pooled ESM space.
+      2. Take that training protein's true affinity profile over the same DNA probes.
+      3. Z-score both profiles.
+      4. Blend them with a fixed global alpha.
+
+    This is a prediction-time prior, not a train-time loss term.
+    """
+    train_ids = np.asarray(train_ids)
+    y_blend = np.empty_like(y_pred, dtype=np.float32)
+
+    for pid in val_ids:
+        m = prot_idx == pid
+
+        sims = protein_sim_emb[pid] @ protein_sim_emb[train_ids].T
+        nearest_pid = int(train_ids[int(np.argmax(sims))])
+
+        model_profile = y_pred[m]
+        nearest_profile = aff_raw[dna_idx[m], nearest_pid]
+
+        y_blend[m] = (
+            alpha_model * _zscore_np(model_profile)
+            + (1.0 - alpha_model) * _zscore_np(nearest_profile)
+        ).astype(np.float32)
+
+    return y_blend
 
 def build_scheduler(optimizer, cfg):
     """Returns (scheduler, kind). kind='cosine' steps once per epoch with no args
@@ -227,6 +298,15 @@ def train_one_fold(fold, train_ids, val_ids, data, dna_onehot, esm_emb, cfg, dev
     patience = cfg["early_stop_patience"]
     bad_epochs = 0
 
+    knn_cfg = cfg.get("knn_blend", {})
+    knn_blend_enabled = bool(knn_cfg.get("enabled", False))
+    knn_alpha = float(knn_cfg.get("alpha_model", 1.0))
+
+    if knn_blend_enabled:
+        protein_sim_emb = _pooled_protein_embeddings_np(esm_emb, esm_mask=esm_mask)
+    else:
+        protein_sim_emb = None
+
     for epoch in range(1, cfg["epochs"] + 1):
         tr_loss = train_epoch_blocked(
             model, dna_onehot, esm_emb, probe_ids, train_ids, tmat_train,
@@ -237,13 +317,41 @@ def train_one_fold(fold, train_ids, val_ids, data, dna_onehot, esm_emb, cfg, dev
             model, dna_onehot, esm_emb, val_ids, aff, device,
             tta_rc=cfg.get("tta_rc", False), esm_mask=esm_mask,
         )
-        corr = per_protein_correlations(vpidx, vtrue, vpred)
-        pe, sp = corr["pearson_mean"], corr["spearman_mean"]
+        corr_model = per_protein_correlations(vpidx, vtrue, vpred)
+        pe_model, sp_model = corr_model["pearson_mean"], corr_model["spearman_mean"]
+
+        vpred_for_metric = vpred
+
+        if knn_blend_enabled:
+            vpred_blend = apply_knn_blend_predictions(
+                prot_idx=vpidx,
+                dna_idx=vdidx,
+                y_pred=vpred,
+                aff_raw=aff,
+                train_ids=train_ids,
+                val_ids=val_ids,
+                protein_sim_emb=protein_sim_emb,
+                alpha_model=knn_alpha,
+            )
+            corr_blend = per_protein_correlations(vpidx, vtrue, vpred_blend)
+            pe, sp = corr_blend["pearson_mean"], corr_blend["spearman_mean"]
+            vpred_for_metric = vpred_blend
+        else:
+            pe, sp = pe_model, sp_model
+
         scheduler.step(pe) if sched_kind == "plateau" else scheduler.step()
-        print(
-            f"  fold {fold} epoch {epoch:02d}  train_loss={tr_loss:.4f}  "
-            f"val_pearson={pe:.4f}  val_spearman={sp:.4f}"
-        )
+
+        if knn_blend_enabled:
+            print(
+                f"  fold {fold} epoch {epoch:02d}  train_loss={tr_loss:.4f}  "
+                f"val_pearson_model={pe_model:.4f}  val_pearson_blend={pe:.4f}  "
+                f"val_spearman_model={sp_model:.4f}  val_spearman_blend={sp:.4f}"
+            )
+        else:
+            print(
+                f"  fold {fold} epoch {epoch:02d}  train_loss={tr_loss:.4f}  "
+                f"val_pearson={pe:.4f}  val_spearman={sp:.4f}"
+            )
 
         if pe > best_pearson:
             best_pearson = pe
@@ -251,8 +359,9 @@ def train_one_fold(fold, train_ids, val_ids, data, dna_onehot, esm_emb, cfg, dev
             best_preds = {
                 "prot_idx": vpidx,
                 "dna_idx": vdidx,
-                "y_true": vtrue,   # raw affinity
-                "y_pred": vpred,   # model output (transformed space)
+                "y_true": vtrue,              # raw affinity
+                "y_pred": vpred_for_metric,   # final prediction used for validation metric
+                "y_pred_model": vpred,        # raw neural model prediction, kept for debugging
             }
             bad_epochs = 0
         else:

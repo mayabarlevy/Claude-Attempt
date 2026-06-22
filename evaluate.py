@@ -120,7 +120,21 @@ def main() -> None:
         os.path.join(here, cfg["seq_path"]),
         os.path.join(here, cfg["data_path"]),
     )
-    esm_emb = torch.load(os.path.join(here, cfg["esm_cache"]), map_location="cpu")["embeddings"].numpy()
+    ckpt = torch.load(os.path.join(here, cfg["esm_cache"]), map_location="cpu")
+    esm_emb = ckpt["embeddings"].float()
+
+    if esm_emb.ndim == 3:
+        lengths = ckpt.get("lengths", None)
+        pooled = []
+        for i in range(esm_emb.shape[0]):
+            if lengths is not None:
+                L = int(lengths[i])
+                pooled.append(esm_emb[i, :L].mean(dim=0))
+            else:
+                pooled.append(esm_emb[i].mean(dim=0))
+        esm_emb = torch.stack(pooled, dim=0)
+
+    esm_emb = esm_emb.numpy()
 
     run_dir = os.path.join(here, args.run_dir)
     print("=== Leave-proteins-out evaluation (mean +/- std over held-out proteins) ===")

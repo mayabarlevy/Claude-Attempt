@@ -68,6 +68,17 @@ rc_prob: 0.5           # probability of reverse-complement augmentation per samp
 tta_rc: true           # eval-time: average prediction over probe + its reverse-complement
 early_stop_patience: 20
 
+# Hybrid validation prediction:
+# Blend the neural model prediction with a nearest-neighbor protein profile.
+# For each held-out protein, we find the most similar training protein in ESM space,
+# z-score both profiles, and use:
+#   final_pred = alpha_model * model_pred + (1 - alpha_model) * nearest_profile
+# This is only used during validation/prediction, not during gradient training.
+knn_blend:
+  enabled: true
+  alpha_model: 0.7
+
 # --- cross-validation ---
 n_splits: 5            # leave-proteins-out GroupKFold (50 proteins -> 10 held out/fold)
 seed: 0
+

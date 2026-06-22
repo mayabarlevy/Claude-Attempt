@@ -227,6 +227,7 @@ class CNNDeepPosEncoder(BaseDNAEncoder):
         h = self.proj(h).transpose(1, 2)   # [B, L, out_dim]
         return self.norm(h)
 
+
 @register_dna_encoder("cnn_deep_pos_dnafeat")
 class CNNDeepPosDNAFeatEncoder(BaseDNAEncoder):
     """CNNDeepPosEncoder with simple DNA biochemical feature channels.
@@ -421,7 +422,7 @@ class AttnPoolTokensPhysBiasEncoder(AttnPoolTokensEncoder):
             dropout=dropout,
         )
         self.phys_bias_scale = nn.Parameter(torch.tensor(float(phys_bias_init)))
-
+        
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         # x: [B, R, in_dim]; mask: [B, R] bool
         h = self.proj(x)
@@ -438,7 +439,7 @@ class AttnPoolTokensPhysBiasEncoder(AttnPoolTokensEncoder):
             aromatic = phys[..., 3]
 
             # Higher for K/R/H-like positive residues; lower for D/E-like negative residues.
-            basic_score = charge + 0.25 * aromatic
+            basic_score = charge + 0.25 * aromatic 
 
             logits = logits + self.phys_bias_scale * basic_score.unsqueeze(1)
 
